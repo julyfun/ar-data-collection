@@ -1,0 +1,194 @@
+import SwiftUI
+import AVFoundation
+import ARKit
+
+struct ContentView: UIViewRepresentable {
+    @State private var depthImage: UIImage?
+
+    func makeUIView(context: Context) -> UIView {
+        let containerView = UIView(frame: .zero)
+        
+        let previewLayer = AVCaptureVideoPreviewLayer(session: context.coordinator.captureSession)
+        previewLayer.videoGravity = .resizeAspectFill
+        previewLayer.frame = containerView.bounds
+        containerView.layer.addSublayer(previewLayer)
+        
+        let arView = ARSCNView(frame: .zero)
+        arView.translatesAutoresizingMaskIntoConstraints = false
+        containerView.addSubview(arView)
+
+        NSLayoutConstraint.activate([
+            arView.topAnchor.constraint(equalTo: containerView.topAnchor),
+            arView.bottomAnchor.constraint(equalTo: containerView.bottomAnchor),
+            arView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
+            arView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor)
+        ])
+
+        let depthImageView = UIImageView(frame: .zero)
+        depthImageView.translatesAutoresizingMaskIntoConstraints = false
+        depthImageView.contentMode = .scaleAspectFit
+        containerView.addSubview(depthImageView)
+
+        NSLayoutConstraint.activate([
+            depthImageView.topAnchor.constraint(equalTo: containerView.topAnchor, constant: 20),
+            depthImageView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 20),
+            depthImageView.widthAnchor.constraint(equalToConstant: 400),
+            depthImageView.heightAnchor.constraint(equalToConstant: 400)
+        ])
+
+        context.coordinator.depthImageView = depthImageView
+
+        let saveButton = UIButton(type: .system)
+        saveButton.setTitle("Save Images", for: .normal)
+        saveButton.translatesAutoresizingMaskIntoConstraints = false
+        saveButton.addTarget(context.coordinator, action: #selector(Coordinator.saveImages), for: .touchUpInside)
+        containerView.addSubview(saveButton)
+
+        NSLayoutConstraint.activate([
+            saveButton.bottomAnchor.constraint(equalTo: containerView.bottomAnchor, constant: -20),
+            saveButton.centerXAnchor.constraint(equalTo: containerView.centerXAnchor)
+        ])
+
+        context.coordinator.startCaptureSession()
+
+        let configuration = ARWorldTrackingConfiguration()
+        configuration.planeDetection = [.horizontal, .vertical]
+
+        // Enable scene depth
+        if type(of: configuration).supportsFrameSemantics(.sceneDepth) {
+            configuration.frameSemantics.insert(.sceneDepth)
+        }
+
+        arView.session.run(configuration)
+        arView.delegate = context.coordinator as! any ARSCNViewDelegate
+        arView.session.delegate = context.coordinator // Set session delegate
+        context.coordinator.arView = arView
+
+        return containerView
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        // Update the view if needed
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    class Coordinator: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, ARSessionDelegate {
+        var parent: ContentView
+        var depthImageView: UIImageView?
+        var captureSession: AVCaptureSession
+        var arView: ARSCNView?
+
+        init(_ parent: ContentView) {
+            self.parent = parent
+            self.captureSession = AVCaptureSession()
+            super.init()
+            setupCaptureSession()
+        }
+
+        private func setupCaptureSession() {
+            captureSession.beginConfiguration()
+            guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else { return }
+            guard let videoInput = try? AVCaptureDeviceInput(device: videoDevice) else { return }
+            if captureSession.canAddInput(videoInput) {
+                captureSession.addInput(videoInput)
+            }
+
+            let videoOutput = AVCaptureVideoDataOutput()
+            videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "videoQueue"))
+            if captureSession.canAddOutput(videoOutput) {
+                captureSession.addOutput(videoOutput)
+            }
+            captureSession.commitConfiguration()
+        }
+
+        func startCaptureSession() {
+            captureSession.startRunning()
+        }
+
+        func stopCaptureSession() {
+            captureSession.stopRunning()
+        }
+
+        func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+            let context = CIContext()
+            if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
+                let uiImage = UIImage(cgImage: cgImage)
+                DispatchQueue.main.async {
+                    self.depthImageView?.image = uiImage
+                }
+            }
+        }
+
+        func session(_ session: ARSession, didUpdate frame: ARFrame) {
+            guard let sceneDepth = frame.sceneDepth else { return }
+            let depthMap = sceneDepth.depthMap
+            displayDepthMap(depthMap)
+        }
+
+        private func displayDepthMap(_ depthMap: CVPixelBuffer) {
+            CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+
+            let width = CVPixelBufferGetWidth(depthMap)
+            let height = CVPixelBufferGetHeight(depthMap)
+            let floatBuffer = unsafeBitCast(CVPixelBufferGetBaseAddress(depthMap), to: UnsafePointer<Float32>.self)
+
+            let depthImage = imageFromDepthMap(floatBuffer, width: width, height: height)
+
+            // Update the depth image view on the main thread
+            DispatchQueue.main.async {
+                self.depthImageView?.image = depthImage
+            }
+        }
+
+        private func imageFromDepthMap(_ depthMap: UnsafePointer<Float32>, width: Int, height: Int) -> UIImage {
+            // Convert depth map to grayscale image
+            let bitsPerComponent = 8
+            let bytesPerRow = width
+            var pixelData = [UInt8](repeating: 0, count: width * height)
+            for y in 0..<height {
+                for x in 0..<width {
+                    let depthValue = depthMap[y * width + x]
+                    let pixelValue = UInt8(min(255.0, depthValue * 255.0)) // Normalize to 0-255
+                    pixelData[y * width + x] = pixelValue
+                }
+            }
+
+            let colorSpace = CGColorSpaceCreateDeviceGray()
+            let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue)
+            let providerRef = CGDataProvider(data: NSData(bytes: &pixelData, length: pixelData.count))
+
+            let cgImage = CGImage(
+                width: width,
+                height: height,
+                bitsPerComponent: bitsPerComponent,
+                bitsPerPixel: bitsPerComponent,
+                bytesPerRow: bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: bitmapInfo,
+                provider: providerRef!,
+                decode: nil,
+                shouldInterpolate: false,
+                intent: .defaultIntent
+            )
+
+            return UIImage(cgImage: cgImage!)
+        }
+
+        @objc func saveImages() {
+            // Implement save image functionality if needed
+        }
+    }
+}
+
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        ContentView()
+    }
+}
+

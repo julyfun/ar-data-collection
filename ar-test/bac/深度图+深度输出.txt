@@ -7,8 +7,6 @@ struct ContentView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UIView {
         let containerView = UIView(frame: .zero)
-
-        // [ar]
         let arView = ARSCNView(frame: .zero)
         arView.translatesAutoresizingMaskIntoConstraints = false
         containerView.addSubview(arView)
@@ -20,7 +18,6 @@ struct ContentView: UIViewRepresentable {
             arView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor)
         ])
 
-        // [depth]
         let depthImageView = UIImageView(frame: .zero)
         depthImageView.translatesAutoresizingMaskIntoConstraints = false
         depthImageView.contentMode = .scaleAspectFit
@@ -29,13 +26,12 @@ struct ContentView: UIViewRepresentable {
         NSLayoutConstraint.activate([
             depthImageView.topAnchor.constraint(equalTo: containerView.topAnchor, constant: 20),
             depthImageView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 20),
-            depthImageView.widthAnchor.constraint(equalToConstant: 200),
-            depthImageView.heightAnchor.constraint(equalToConstant: 200)
+            depthImageView.widthAnchor.constraint(equalToConstant: 400),
+            depthImageView.heightAnchor.constraint(equalToConstant: 400)
         ])
 
         context.coordinator.depthImageView = depthImageView
 
-        // [button]
         let saveButton = UIButton(type: .system)
         saveButton.setTitle("Save Images", for: .normal)
         saveButton.translatesAutoresizingMaskIntoConstraints = false
@@ -47,7 +43,6 @@ struct ContentView: UIViewRepresentable {
             saveButton.centerXAnchor.constraint(equalTo: containerView.centerXAnchor)
         ])
 
-        // [ar conf]
         let configuration = ARWorldTrackingConfiguration()
         configuration.planeDetection = [.horizontal, .vertical]
 
@@ -56,12 +51,55 @@ struct ContentView: UIViewRepresentable {
             configuration.frameSemantics.insert(.sceneDepth)
         }
 
+        configureCameraFrameRate(to: 24)
         arView.session.run(configuration)
+        // configureCameraExposure()
+        configureCameraFrameRate(to: 23)
+
         arView.delegate = context.coordinator
-        arView.session.delegate = context.coordinator
+        arView.session.delegate = context.coordinator // Set session delegate
         context.coordinator.arView = arView
         return containerView
     }
+    
+    func configureCameraExposure() {
+        guard let device = AVCaptureDevice.default(for: .video) else { return }
+        
+        do {
+            try device.lockForConfiguration()
+            
+            device.exposureMode = .custom
+            
+            // 设置曝光时间（以秒为单位）
+            let exposureDuration = CMTimeMake(value: 1, timescale: 200) // 例如，1/30秒
+            
+            device.setExposureModeCustom(duration: exposureDuration, iso: AVCaptureDevice.currentISO) { time in
+                print("Exposure set to \(time.seconds) seconds")
+            }
+            
+            device.unlockForConfiguration()
+            print("Exposure configuration successful")
+        } catch {
+            print("Error locking configuration: \(error)")
+        }
+    }
+
+    func configureCameraFrameRate(to fps: Int) {
+        guard let device = AVCaptureDevice.default(for: .video) else { return }
+        
+        do {
+            try device.lockForConfiguration()
+            // 设置自定义帧率
+            let desiredFrameDuration = CMTimeMake(value: 1, timescale: Int32(fps))
+            device.activeVideoMinFrameDuration = desiredFrameDuration
+            device.activeVideoMaxFrameDuration = desiredFrameDuration
+            device.unlockForConfiguration()
+            print("fps set to \(fps)")
+        } catch {
+            print("Error locking configuration: \(error)")
+        }
+    }
+
 
     func updateUIView(_ uiView: UIView, context: Context) {
         // Update the view if needed
@@ -71,10 +109,14 @@ struct ContentView: UIViewRepresentable {
         Coordinator(self)
     }
 
+
     class Coordinator: NSObject, ARSCNViewDelegate, ARSessionDelegate {
         var parent: ContentView
         var depthImageView: UIImageView?
         var arView: ARSCNView?
+        private var lastFrameTimestamp: TimeInterval?
+        private var frameCount: Int = 0
+        private var startTime: TimeInterval?
 
         init(_ parent: ContentView) {
             self.parent = parent
@@ -97,16 +139,27 @@ struct ContentView: UIViewRepresentable {
             // Handle session interruption end
         }
 
-        // Implement ARSessionDelegate method to capture depth data and camera transform
+        // Implement ARSessionDelegate method to capture depth data
         func session(_ session: ARSession, didUpdate frame: ARFrame) {
-            if let depthData = frame.sceneDepth {
-                let depthMap = depthData.depthMap
-                displayDepthMap(depthMap)
-            }
 
-            // 获取相机 transform
-            let cameraTransform = frame.camera.transform
-            print("Camera Transform: \(cameraTransform)")
+            let pixelBuffer = frame.capturedImage
+            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+            let context = CIContext()
+            if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
+                let uiImage = UIImage(cgImage: cgImage)
+                DispatchQueue.main.async {
+                    self.depthImageView?.image = uiImage
+                }
+
+                // [fps]
+                let currentTime = frame.timestamp
+                if let lastTime = lastFrameTimestamp {
+                    let deltaTime = currentTime - lastTime
+                    let fps = 1.0 / deltaTime
+                    // print("Current FPS: \(fps)")
+                }
+                lastFrameTimestamp = currentTime
+            }
         }
 
         private func displayDepthMap(_ depthMap: CVPixelBuffer) {
@@ -156,6 +209,7 @@ struct ContentView: UIViewRepresentable {
             guard let arView = arView else { return }
             guard let currentFrame = arView.session.currentFrame else { return }
 
+            printCenterImageValues(from: currentFrame.capturedImage, label: "ok omg")
             // Capture RGB image
             guard let rgbImage = UIImage(pixelBuffer: currentFrame.capturedImage) else { return }
 
@@ -188,7 +242,60 @@ struct ContentView: UIViewRepresentable {
                 print("Error saving image: \(error)")
             }
         }
+
+        private func printCenterImageValues(from imageBuffer: CVPixelBuffer, label: String) {
+            CVPixelBufferLockBaseAddress(imageBuffer, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(imageBuffer, .readOnly) }
+
+            let width = CVPixelBufferGetWidth(imageBuffer)
+            let height = CVPixelBufferGetHeight(imageBuffer)
+            let baseAddress = CVPixelBufferGetBaseAddress(imageBuffer)!
+
+            // Assuming the image is in BGRA format (4 bytes per pixel)
+            let buffer = baseAddress.assumingMemoryBound(to: UInt8.self)
+
+            // Calculate the center pixel index
+            let centerX = width / 2
+            let centerY = height / 2
+
+            // Print the values of the center 3x3 pixels (BGRA format)
+            let centerValues = (-1...1).flatMap { yOffset in
+                (-1...1).map { xOffset in
+                    let pixelOffset = ((centerY + yOffset) * width + (centerX + xOffset)) * 4
+                    let b = buffer[pixelOffset]
+                    let g = buffer[pixelOffset + 1]
+                    let r = buffer[pixelOffset + 2]
+                    let a = buffer[pixelOffset + 3]
+                    return (b, g, r, a)
+                }
+            }
+            print("\(label) - Center 3x3 pixel values: \(centerValues)")
+        }
+
+        private func printFirstRowImageValues(from imageBuffer: CVPixelBuffer, label: String) {
+            CVPixelBufferLockBaseAddress(imageBuffer, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(imageBuffer, .readOnly) }
+
+            let width = CVPixelBufferGetWidth(imageBuffer)
+            let baseAddress = CVPixelBufferGetBaseAddress(imageBuffer)!
+
+            // Assuming the image is in BGRA format (4 bytes per pixel)
+            let buffer = baseAddress.assumingMemoryBound(to: UInt8.self)
+
+            // Print the first 10 values of the first row (BGRA format)
+            let firstRowValues = (0..<min(10, width)).map { index in
+                let pixelOffset = index * 4
+                let b = buffer[pixelOffset]
+                let g = buffer[pixelOffset + 1]
+                let r = buffer[pixelOffset + 2]
+                let a = buffer[pixelOffset + 3]
+                return (b, g, r, a)
+            }
+
+            print("\(label) - First 10 values of the first row: \(firstRowValues)")
+        }
     }
+
 }
 
 extension UIImage {
@@ -221,3 +328,5 @@ struct ContentView_Previews: PreviewProvider {
         ContentView()
     }
 }
+
+

@@ -1,0 +1,101 @@
+import SwiftUI
+import RealityKit
+import ARKit
+
+// hello
+
+struct ContentView: View {
+    var body: some View {
+        ARViewContainer().edgesIgnoringSafeArea(.all)
+    }
+}
+
+struct ARViewContainer: UIViewRepresentable {
+
+    func makeUIView(context: Context) -> ARView {
+        let arView = ARView(frame: .zero)
+
+        // Configure AR session for scene depth and multi-camera support
+        let configuration = ARWorldTrackingConfiguration()
+        if type(of: configuration).supportsFrameSemantics(.sceneDepth) {
+            configuration.frameSemantics.insert(.sceneDepth)
+        }
+        if type(of: configuration).supportsFrameSemantics(.personSegmentationWithDepth) {
+            configuration.frameSemantics.insert(.personSegmentationWithDepth)
+        }
+        arView.session.run(configuration)
+
+        // Set the delegate to receive frame updates
+        arView.session.delegate = context.coordinator
+
+        return arView
+    }
+
+    func updateUIView(_ uiView: ARView, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        return Coordinator()
+    }
+
+    class Coordinator: NSObject, ARSessionDelegate {
+        func session(_ session: ARSession, didUpdate frame: ARFrame) {
+            // Extract and print the first 10 values of the first row of the depth map
+            if let depthData = frame.sceneDepth {
+                let depthMap = depthData.depthMap
+                printFirstRowDepthValues(from: depthMap, label: "Depth Map")
+            }
+
+            // Extract and print the first 10 values of the first row of the wide camera image
+            let wideCameraImage = frame.capturedImage
+            printFirstRowImageValues(from: wideCameraImage, label: "Wide Camera Image")
+
+            // Extract and print the first 10 values of the first row of the regular camera image
+            if let regularCameraImage = frame.capturedDepthData?.depthDataMap {
+                printFirstRowDepthValues(from: regularCameraImage, label: "Regular Camera Image")
+            } else {
+                print("No Regular data")
+            }
+        }
+
+        private func printFirstRowDepthValues(from depthMap: CVPixelBuffer, label: String) {
+            CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+
+            let width = CVPixelBufferGetWidth(depthMap)
+            let baseAddress = CVPixelBufferGetBaseAddress(depthMap)!
+
+            // Assuming the depth map is in Float32 format
+            let floatBuffer = baseAddress.assumingMemoryBound(to: Float32.self)
+
+            // Print the first 10 values of the first row
+            let firstRowValues = (0..<min(10, width)).map { floatBuffer[$0] }
+            print("\(label) - First 10 values of the first row: \(firstRowValues)")
+        }
+
+        private func printFirstRowImageValues(from imageBuffer: CVPixelBuffer, label: String) {
+            CVPixelBufferLockBaseAddress(imageBuffer, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(imageBuffer, .readOnly) }
+
+            let width = CVPixelBufferGetWidth(imageBuffer)
+            let baseAddress = CVPixelBufferGetBaseAddress(imageBuffer)!
+
+            // Assuming the image is in BGRA format (4 bytes per pixel)
+            let buffer = baseAddress.assumingMemoryBound(to: UInt8.self)
+
+            // Print the first 10 values of the first row (BGRA format)
+            let firstRowValues = (0..<min(10, width)).map { index in
+                let pixelOffset = index * 4
+                let b = buffer[pixelOffset]
+                let g = buffer[pixelOffset + 1]
+                let r = buffer[pixelOffset + 2]
+                let a = buffer[pixelOffset + 3]
+                return (b, g, r, a)
+            }
+            print("\(label) - First 10 values of the first row: \(firstRowValues)")
+        }
+    }
+}
+
+#Preview {
+    ContentView()
+}
