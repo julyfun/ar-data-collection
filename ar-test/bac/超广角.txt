@@ -1,0 +1,111 @@
+import SwiftUI
+import AVFoundation
+
+struct ContentView: UIViewRepresentable {
+    @State private var depthImage: UIImage?
+
+    func makeUIView(context: Context) -> UIView {
+        let containerView = UIView(frame: .zero)
+        
+        let previewLayer = AVCaptureVideoPreviewLayer(session: context.coordinator.captureSession)
+        previewLayer.videoGravity = .resizeAspectFill
+        previewLayer.frame = containerView.bounds
+        containerView.layer.addSublayer(previewLayer)
+        
+        let depthImageView = UIImageView(frame: .zero)
+        depthImageView.translatesAutoresizingMaskIntoConstraints = false
+        depthImageView.contentMode = .scaleAspectFit
+        containerView.addSubview(depthImageView)
+
+        NSLayoutConstraint.activate([
+            depthImageView.topAnchor.constraint(equalTo: containerView.topAnchor, constant: 20),
+            depthImageView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 20),
+            depthImageView.widthAnchor.constraint(equalToConstant: 400),
+            depthImageView.heightAnchor.constraint(equalToConstant: 400)
+        ])
+
+        context.coordinator.depthImageView = depthImageView
+
+        let saveButton = UIButton(type: .system)
+        saveButton.setTitle("Save Images", for: .normal)
+        saveButton.translatesAutoresizingMaskIntoConstraints = false
+        saveButton.addTarget(context.coordinator, action: #selector(Coordinator.saveImages), for: .touchUpInside)
+        containerView.addSubview(saveButton)
+
+        NSLayoutConstraint.activate([
+            saveButton.bottomAnchor.constraint(equalTo: containerView.bottomAnchor, constant: -20),
+            saveButton.centerXAnchor.constraint(equalTo: containerView.centerXAnchor)
+        ])
+
+        context.coordinator.startCaptureSession()
+        return containerView
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        // Update the view if needed
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    class Coordinator: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
+        var parent: ContentView
+        var depthImageView: UIImageView?
+        var captureSession: AVCaptureSession
+
+        init(_ parent: ContentView) {
+            self.parent = parent
+            self.captureSession = AVCaptureSession()
+            super.init()
+            setupCaptureSession()
+        }
+
+        private func setupCaptureSession() {
+            captureSession.beginConfiguration()
+            guard let videoDevice = AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: .back) else { return }
+            guard let videoInput = try? AVCaptureDeviceInput(device: videoDevice) else { return }
+            if captureSession.canAddInput(videoInput) {
+                captureSession.addInput(videoInput)
+            }
+
+            let videoOutput = AVCaptureVideoDataOutput()
+            videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "videoQueue"))
+            if captureSession.canAddOutput(videoOutput) {
+                captureSession.addOutput(videoOutput)
+            }
+            captureSession.commitConfiguration()
+        }
+
+        func startCaptureSession() {
+            captureSession.startRunning()
+        }
+
+        func stopCaptureSession() {
+            captureSession.stopRunning()
+        }
+
+        func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+            let context = CIContext()
+            if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
+                let uiImage = UIImage(cgImage: cgImage)
+                DispatchQueue.main.async {
+                    self.depthImageView?.image = uiImage
+                }
+            }
+        }
+
+        @objc func saveImages() {
+            // Implement save image functionality if needed
+        }
+    }
+}
+
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        ContentView()
+    }
+}
+

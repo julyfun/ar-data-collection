@@ -7,8 +7,6 @@ struct ContentView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UIView {
         let containerView = UIView(frame: .zero)
-
-        // [ar]
         let arView = ARSCNView(frame: .zero)
         arView.translatesAutoresizingMaskIntoConstraints = false
         containerView.addSubview(arView)
@@ -20,7 +18,6 @@ struct ContentView: UIViewRepresentable {
             arView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor)
         ])
 
-        // [depth]
         let depthImageView = UIImageView(frame: .zero)
         depthImageView.translatesAutoresizingMaskIntoConstraints = false
         depthImageView.contentMode = .scaleAspectFit
@@ -35,19 +32,6 @@ struct ContentView: UIViewRepresentable {
 
         context.coordinator.depthImageView = depthImageView
 
-        // [button]
-        let saveButton = UIButton(type: .system)
-        saveButton.setTitle("Save Images", for: .normal)
-        saveButton.translatesAutoresizingMaskIntoConstraints = false
-        saveButton.addTarget(context.coordinator, action: #selector(Coordinator.saveImages), for: .touchUpInside)
-        containerView.addSubview(saveButton)
-
-        NSLayoutConstraint.activate([
-            saveButton.bottomAnchor.constraint(equalTo: containerView.bottomAnchor, constant: -20),
-            saveButton.centerXAnchor.constraint(equalTo: containerView.centerXAnchor)
-        ])
-
-        // [ar conf]
         let configuration = ARWorldTrackingConfiguration()
         configuration.planeDetection = [.horizontal, .vertical]
 
@@ -58,8 +42,7 @@ struct ContentView: UIViewRepresentable {
 
         arView.session.run(configuration)
         arView.delegate = context.coordinator
-        arView.session.delegate = context.coordinator
-        context.coordinator.arView = arView
+        arView.session.delegate = context.coordinator // Set session delegate
         return containerView
     }
 
@@ -74,7 +57,6 @@ struct ContentView: UIViewRepresentable {
     class Coordinator: NSObject, ARSCNViewDelegate, ARSessionDelegate {
         var parent: ContentView
         var depthImageView: UIImageView?
-        var arView: ARSCNView?
 
         init(_ parent: ContentView) {
             self.parent = parent
@@ -97,16 +79,12 @@ struct ContentView: UIViewRepresentable {
             // Handle session interruption end
         }
 
-        // Implement ARSessionDelegate method to capture depth data and camera transform
+        // Implement ARSessionDelegate method to capture depth data
         func session(_ session: ARSession, didUpdate frame: ARFrame) {
             if let depthData = frame.sceneDepth {
                 let depthMap = depthData.depthMap
                 displayDepthMap(depthMap)
             }
-
-            // 获取相机 transform
-            let cameraTransform = frame.camera.transform
-            print("Camera Transform: \(cameraTransform)")
         }
 
         private func displayDepthMap(_ depthMap: CVPixelBuffer) {
@@ -151,43 +129,6 @@ struct ContentView: UIViewRepresentable {
             let rotatedImage = uiImage.rotate(radians: .pi / 2) // Rotate 90 degrees
             return rotatedImage
         }
-
-        @objc func saveImages() {
-            guard let arView = arView else { return }
-            guard let currentFrame = arView.session.currentFrame else { return }
-
-            // Capture RGB image
-            guard let rgbImage = UIImage(pixelBuffer: currentFrame.capturedImage) else { return }
-
-            // Capture depth image
-            if let depthData = currentFrame.sceneDepth {
-                let depthMap = depthData.depthMap
-                CVPixelBufferLockBaseAddress(depthMap, .readOnly)
-                defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
-
-                let width = CVPixelBufferGetWidth(depthMap)
-                let height = CVPixelBufferGetHeight(depthMap)
-                let baseAddress = CVPixelBufferGetBaseAddress(depthMap)!
-                let floatBuffer = baseAddress.assumingMemoryBound(to: Float32.self)
-                let depthImage = imageFromDepthMap(floatBuffer, width: width, height: height)
-
-                // Save images as JPGs
-                saveImage(rgbImage, withName: "rgbImage.jpg")
-                saveImage(depthImage, withName: "depthImage.jpg")
-            }
-        }
-
-        private func saveImage(_ image: UIImage, withName name: String) {
-            guard let data = image.jpegData(compressionQuality: 1.0) else { return }
-            let documentsDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-            let fileURL = documentsDirectory.appendingPathComponent(name)
-            do {
-                try data.write(to: fileURL)
-                print("Saved image to \(fileURL)")
-            } catch {
-                print("Error saving image: \(error)")
-            }
-        }
     }
 }
 
@@ -204,15 +145,6 @@ extension UIImage {
         let rotatedImage = UIGraphicsGetImageFromCurrentImageContext()
         UIGraphicsEndImageContext()
         return rotatedImage!
-    }
-}
-
-extension UIImage {
-    convenience init?(pixelBuffer: CVPixelBuffer) {
-        var ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let context = CIContext()
-        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return nil }
-        self.init(cgImage: cgImage)
     }
 }
 

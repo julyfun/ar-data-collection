@@ -1,12 +1,20 @@
 import SwiftUI
 import ARKit
 import SceneKit
+import AVFoundation
 
 struct ContentView: UIViewRepresentable {
     @State private var depthImage: UIImage?
 
     func makeUIView(context: Context) -> UIView {
         let containerView = UIView(frame: .zero)
+        
+        // [wide]
+        let previewLayer = AVCaptureVideoPreviewLayer(session: context.coordinator.captureSession)
+        previewLayer.videoGravity = .resizeAspectFill
+        previewLayer.frame = containerView.bounds
+        containerView.layer.addSublayer(previewLayer)
+
 
         // [ar]
         let arView = ARSCNView(frame: .zero)
@@ -56,10 +64,13 @@ struct ContentView: UIViewRepresentable {
             configuration.frameSemantics.insert(.sceneDepth)
         }
 
-        arView.session.run(configuration)
-        arView.delegate = context.coordinator
-        arView.session.delegate = context.coordinator
-        context.coordinator.arView = arView
+//        arView.session.run(configuration)
+//        arView.delegate = context.coordinator
+//        arView.session.delegate = context.coordinator
+//        context.coordinator.arView = arView
+
+        // [sessions]
+        context.coordinator.startCaptureSession()
         return containerView
     }
 
@@ -71,13 +82,56 @@ struct ContentView: UIViewRepresentable {
         Coordinator(self)
     }
 
-    class Coordinator: NSObject, ARSCNViewDelegate, ARSessionDelegate {
+    class Coordinator: NSObject, ARSCNViewDelegate, ARSessionDelegate, AVCaptureVideoDataOutputSampleBufferDelegate {
         var parent: ContentView
         var depthImageView: UIImageView?
         var arView: ARSCNView?
+        var captureSession: AVCaptureSession
 
         init(_ parent: ContentView) {
             self.parent = parent
+
+            self.captureSession = AVCaptureSession()
+            super.init()
+            setupCaptureSession()
+        }
+
+        private func setupCaptureSession() {
+            captureSession.beginConfiguration()
+            guard let videoDevice = AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: .back) else { return }
+            guard let videoInput = try? AVCaptureDeviceInput(device: videoDevice) else { return }
+            if captureSession.canAddInput(videoInput) {
+                captureSession.addInput(videoInput)
+            }
+
+            let videoOutput = AVCaptureVideoDataOutput()
+            videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "videoQueue"))
+            if captureSession.canAddOutput(videoOutput) {
+                captureSession.addOutput(videoOutput)
+            }
+            captureSession.commitConfiguration()
+        }
+
+        // [inherit]
+        func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+            print("captured Output!")
+            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+            let context = CIContext()
+            if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
+                let uiImage = UIImage(cgImage: cgImage)
+                DispatchQueue.main.async {
+                    self.depthImageView?.image = uiImage
+                }
+            }
+        }
+
+        func startCaptureSession() {
+            captureSession.startRunning()
+        }
+
+        func stopCaptureSession() {
+            captureSession.stopRunning()
         }
 
         // Implement ARSCNViewDelegate methods if needed
@@ -221,3 +275,4 @@ struct ContentView_Previews: PreviewProvider {
         ContentView()
     }
 }
+
