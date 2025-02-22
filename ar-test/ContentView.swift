@@ -3,6 +3,7 @@ import ARKit
 import RealityKit
 
 struct ContentView: View {
+    // 状态变量
     @State private var isARActive = false
     @State private var poseInfo: String = ""
     
@@ -36,6 +37,7 @@ struct ContentView: View {
 struct ARViewContainer: UIViewRepresentable {
     @Binding var poseInfo: String
     
+    // of UIViewRepresentable
     func makeUIView(context: Context) -> ARSCNView {
         let arView = ARSCNView(frame: .zero)
         arView.session.delegate = context.coordinator
@@ -46,24 +48,26 @@ struct ARViewContainer: UIViewRepresentable {
     
     func updateUIView(_ uiView: ARSCNView, context: Context) {}
     
+    // of UIViewRepresentable
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
     }
     
-    class Coordinator: NSObject, ARSessionDelegate {
-        var parent: ARViewContainer
-        
-        init(_ parent: ARViewContainer) {
-            self.parent = parent
-        }
-        
-        func session(_ session: ARSession, didUpdate frame: ARFrame) {
-            let transform = frame.camera.transform
-            parent.poseInfo = """
-                位置: X: \(String(format: "%.2f", transform.columns.3.x))
-                     Y: \(String(format: "%.2f", transform.columns.3.y))
-                     Z: \(String(format: "%.2f", transform.columns.3.z))
-                """
-        }
+}
+
+class Coordinator: NSObject, ARSessionDelegate {
+    var parent: ARViewContainer
+    
+    init(_ parent: ARViewContainer) {
+        self.parent = parent
+    }
+    
+    func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        let transform = frame.camera.transform
+        parent.poseInfo = """
+            位置: X: \(String(format: "%.2f", transform.columns.3.x))
+                    Y: \(String(format: "%.2f", transform.columns.3.y))
+                    Z: \(String(format: "%.2f", transform.columns.3.z))
+            """
     }
 }
